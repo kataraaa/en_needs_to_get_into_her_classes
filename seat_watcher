@@ -4,7 +4,7 @@ import re
 import urllib.request
 
 TERM_CODE = "202702"  # e.g., 202702 = Winter 2027, 202703 = Spring 2027
-TARGET_CRNS = ["31676", "31675"]
+TARGET_CRNS = ["31676", "31675", "31677"]
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 
 API_URL = "https://classes.oregonstate.edu/api/?page=fose&route=details"
