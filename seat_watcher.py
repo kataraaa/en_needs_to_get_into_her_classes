@@ -1,16 +1,22 @@
+from datetime import datetime, timedelta, timezone
 import json
 import os
-import re
 import sys
 import urllib.request
 
 # OSU Term Codes: 202701 = Fall 2026 | 202702 = Winter 2027 | 202703 = Spring 2027
 TERM_CODE = "202702"
-TARGET_CRNS = ["31675", "31676", "31677"]
+TARGET_CRNS = ["31676", "31677", "39013", "31675"]
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 
+# Mute phone alerts until Thursday, November 19, 2026 at 5:00 AM PST
+PST = timezone(timedelta(hours=-8))
+MUTE_UNTIL = datetime(2026, 11, 19, 5, 0, 0, tzinfo=PST)
+
 SEARCH_URL = "https://classes.oregonstate.edu/api/?page=fose&route=search"
-DETAILS_URL = "https://classes.oregonstate.edu/api/?page=fose&route=details"
+REGISTRATION_URL = (
+    "https://prodapps.isadm.oregonstate.edu/StudentRegistrationSsb/ssb/term/termSelection?mode=registration"
+)
 HEADERS = {
     "Content-Type": "application/json",
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
@@ -19,63 +25,32 @@ HEADERS = {
 }
 
 
-def post_json(url: str, payload: dict) -> dict:
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers=HEADERS,
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def extract_seat_info(details_data: dict, section: dict) -> tuple[int, str]:
-    candidate_texts = []
-    for key in ("seats", "enrollment", "seat_info", "avail", "clss_seats"):
-        val = details_data.get(key)
-        if val:
-            candidate_texts.append(str(val))
-
-    if not candidate_texts:
-        for key, val in details_data.items():
-            if isinstance(val, str) and re.search(r"(seat|avail|enroll|waitlist)", val, re.IGNORECASE):
-                candidate_texts.append(f"{key}: {val}")
-
-    for raw in candidate_texts:
-        clean = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw)).strip()
-        match = re.search(r"(?:Seats\s*Available|Available|Open)\s*:\s*(\d+)", clean, re.IGNORECASE)
-        if match:
-            return int(match.group(1)), clean
-
-    # Fallback to CourseLeaf's section status flag ("A" = Available/Open, "F" = Full)
-    stat = str(section.get("stat") or details_data.get("stat") or "").strip().upper()
-    avail = 1 if stat == "A" else 0
-    return avail, f"stat={stat or 'unknown'} (details keys: {list(details_data.keys())})"
-
-
-def check_crn(crn: str) -> tuple[str, int, str]:
-    search_data = post_json(SEARCH_URL, {
+def check_crn(crn: str) -> dict:
+    payload = json.dumps({
         "other": {"srcdb": TERM_CODE},
         "criteria": [{"field": "crn", "value": crn}],
-    })
-    results = search_data.get("results", [])
+    }).encode("utf-8")
+
+    req = urllib.request.Request(SEARCH_URL, data=payload, headers=HEADERS, method="POST")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+
+    results = data.get("results", [])
     if not results:
         raise ValueError(f"CRN {crn} not found in term {TERM_CODE}")
 
     section = next((r for r in results if str(r.get("crn")) == str(crn)), results[0])
-    course_code = section["code"]
-    section_key = section.get("key", f"crn:{crn}")
+    stat = str(section.get("stat", "")).strip().upper()
+    if not stat:
+        raise ValueError(f"Missing status flag for CRN {crn}")
 
-    details_data = post_json(DETAILS_URL, {
-        "group": f"code:{course_code}",
-        "key": section_key,
-        "srcdb": TERM_CODE,
-        "matched": section_key,
-    })
-
-    avail, status_text = extract_seat_info(details_data, section)
-    return course_code, avail, status_text
+    return {
+        "code": section.get("code", "Unknown"),
+        "no": section.get("no", ""),
+        "schd": section.get("schd", ""),
+        "stat": stat,
+        "is_open": stat == "A",
+    }
 
 
 def notify(title: str, message: str) -> None:
@@ -86,7 +61,7 @@ def notify(title: str, message: str) -> None:
             "Title": title,
             "Priority": "urgent",
             "Tags": "rotating_light",
-            "Click": "https://classes.oregonstate.edu/",
+            "Click": REGISTRATION_URL,
         },
         method="POST",
     )
@@ -95,15 +70,24 @@ def notify(title: str, message: str) -> None:
 
 if __name__ == "__main__":
     had_error = False
+    now_pst = datetime.now(PST)
+    is_muted = now_pst < MUTE_UNTIL
+
     for crn in TARGET_CRNS:
         try:
-            course_code, avail, raw_status = check_crn(crn)
-            print(f"{course_code} (CRN {crn}) -> {avail} available ({raw_status})")
-            if avail > 0:
-                notify(
-                    f"OSU Seat Open: {course_code}",
-                    f"{course_code} (CRN {crn}) has {avail} open seat(s). Tap to open scheduler.",
-                )
+            info = check_crn(crn)
+            label = f"{info['code']}-{info['no']} ({info['schd']})".strip()
+            status_label = "OPEN (stat=A)" if info["is_open"] else f"FULL (stat={info['stat']})"
+            print(f"CRN {crn} | {label} -> {status_label}")
+
+            if info["is_open"]:
+                if is_muted:
+                    print(f"  -> Notification muted until {MUTE_UNTIL.strftime('%a %b %d %I:%M %p')} PST")
+                else:
+                    notify(
+                        f"Class Seat Open: {info['code']} (CRN {crn})",
+                        f"CRN {crn} | {label} is now OPEN. Tap to open OSU Registration.",
+                    )
         except Exception as exc:
             print(f"Error checking CRN {crn}: {exc}")
             had_error = True
