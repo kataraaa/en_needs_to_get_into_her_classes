@@ -2,8 +2,8 @@ name: OSU Seat Watcher
 
 on:
   schedule:
-    # Checks every 10 minutes (UTC). GitHub may delay queued runs by 2-5 min at peak times.
-    - cron: "*/10 * * * *"
+    # Runs at :04, :14, :24, :34, :44, :54 to avoid :00/:10 global traffic spikes
+    - cron: "4,14,24,34,44,54 * * * *"
   workflow_dispatch: # Enables 1-click manual runs in the Actions tab
 
 permissions:
