@@ -30,8 +30,31 @@ def post_json(url: str, payload: dict) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def extract_seat_info(details_data: dict, section: dict) -> tuple[int, str]:
+    candidate_texts = []
+    for key in ("seats", "enrollment", "seat_info", "avail", "clss_seats"):
+        val = details_data.get(key)
+        if val:
+            candidate_texts.append(str(val))
+
+    if not candidate_texts:
+        for key, val in details_data.items():
+            if isinstance(val, str) and re.search(r"(seat|avail|enroll|waitlist)", val, re.IGNORECASE):
+                candidate_texts.append(f"{key}: {val}")
+
+    for raw in candidate_texts:
+        clean = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw)).strip()
+        match = re.search(r"(?:Seats\s*Available|Available|Open)\s*:\s*(\d+)", clean, re.IGNORECASE)
+        if match:
+            return int(match.group(1)), clean
+
+    # Fallback to CourseLeaf's section status flag ("A" = Available/Open, "F" = Full)
+    stat = str(section.get("stat") or details_data.get("stat") or "").strip().upper()
+    avail = 1 if stat == "A" else 0
+    return avail, f"stat={stat or 'unknown'} (details keys: {list(details_data.keys())})"
+
+
 def check_crn(crn: str) -> tuple[str, int, str]:
-    # 1. Resolve the course code (e.g., "BI 222") from the CRN
     search_data = post_json(SEARCH_URL, {
         "other": {"srcdb": TERM_CODE},
         "criteria": [{"field": "crn", "value": crn}],
@@ -42,26 +65,17 @@ def check_crn(crn: str) -> tuple[str, int, str]:
 
     section = next((r for r in results if str(r.get("crn")) == str(crn)), results[0])
     course_code = section["code"]
+    section_key = section.get("key", f"crn:{crn}")
 
-    # 2. Fetch live seat availability using the resolved course code
     details_data = post_json(DETAILS_URL, {
         "group": f"code:{course_code}",
-        "key": f"crn:{crn}",
+        "key": section_key,
         "srcdb": TERM_CODE,
-        "matched": f"crn:{crn}",
+        "matched": section_key,
     })
 
-    seats_html = str(details_data.get("seats", ""))
-    clean_text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", seats_html)).strip()
-    if not clean_text:
-        raise ValueError(f"Empty seat details returned for {course_code} (CRN {crn})")
-
-    match = re.search(r"Seats Available:\s*(\d+)", clean_text, re.IGNORECASE)
-    if not match:
-        match = re.search(r"(\d+)", clean_text)
-
-    avail = int(match.group(1)) if match else 0
-    return course_code, avail, clean_text
+    avail, status_text = extract_seat_info(details_data, section)
+    return course_code, avail, status_text
 
 
 def notify(title: str, message: str) -> None:
