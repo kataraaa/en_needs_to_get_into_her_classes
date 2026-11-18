@@ -2,8 +2,8 @@ name: OSU Seat Watcher
 
 on:
   schedule:
-    # Runs at :04, :14, :24, :34, :44, :54 to avoid :00/:10 global traffic spikes
-    - cron: "4,14,24,34,44,54 * * * *"
+    # Runs every 5 minutes (GitHub's fastest allowed interval) on off-peak minutes
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
   workflow_dispatch: # Enables 1-click manual runs in the Actions tab
 
 permissions:
