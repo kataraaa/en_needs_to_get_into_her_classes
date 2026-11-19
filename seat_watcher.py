@@ -6,7 +6,7 @@ import urllib.request
 
 # OSU Term Codes: 202701 = Fall 2026 | 202702 = Winter 2027 | 202703 = Spring 2027
 TERM_CODE = "202702"
-TARGET_CRNS = ["31676", "31677", "39013", "31675"]
+TARGET_CRNS = ["39013"]
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 
 # Mute phone alerts until Thursday, November 19, 2026 at 5:00 AM PST
